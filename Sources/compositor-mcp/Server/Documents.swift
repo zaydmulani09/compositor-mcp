@@ -14,6 +14,10 @@ struct OpenDocument {
     var url: URL?
     var isModified: Bool
     var name: String
+    /// The active selection. `ProjectSnapshot` does not carry it (Compositor never saves
+    /// it to disk), so it is held here to survive between tool calls: apply_selection sets
+    /// it, paint_stroke and crop_canvas read it.
+    var selection: DocumentSelection?
 }
 
 actor DocumentStore {
