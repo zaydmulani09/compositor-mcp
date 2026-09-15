@@ -36,6 +36,13 @@ actor DocumentStore {
         return handle
     }
 
+    /// Records the active selection alongside the document, so the next tool call sees it.
+    func setSelection(_ handle: String, _ selection: DocumentSelection?) throws {
+        var document = try get(handle)
+        document.selection = selection
+        documents[handle] = document
+    }
+
     func get(_ handle: String) throws -> OpenDocument {
         guard let document = documents[handle] else {
             let known = documents.keys.sorted().joined(separator: ", ")
