@@ -93,3 +93,25 @@ private func runStroke(_ session: EditorSession, _ path: [StrokePoint]) {
     session.finishBrushImmediately()
 }
 
+// MARK: - paint_stroke (brush / eraser / smudge / liquify)
+
+func paintStroke(_ p: Params, _ store: DocumentStore) async throws -> ToolResult {
+    let handle = try p.string("document")
+    let layer = try targetLayer(p)
+    let path = try strokePath(p, "path")
+    let toolName = p.string("tool", default: "brush")!
+    try await withSession(handle, store) { session in
+        session.activeLayerID = layer
+        try brushSettings(p, into: session)
+        switch toolName {
+        case "brush":   session.tool = .brush; session.brushMode = .paint
+        case "eraser":  session.tool = .brush; session.brushMode = .erase
+        case "smudge":  session.tool = .blur;  session.blurMode = .smudge
+        case "liquify": session.tool = .blur;  session.blurMode = .liquify
+        default: throw RPCError.invalidParams("`tool` must be brush, eraser, smudge or liquify.")
+        }
+        runStroke(session, path)
+    }
+    return ToolResult("Painted a \(toolName) stroke of \(path.count) points on layer \(layer.uuidString).")
+}
+
