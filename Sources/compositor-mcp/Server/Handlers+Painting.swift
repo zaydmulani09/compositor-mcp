@@ -115,3 +115,44 @@ func paintStroke(_ p: Params, _ store: DocumentStore) async throws -> ToolResult
     return ToolResult("Painted a \(toolName) stroke of \(path.count) points on layer \(layer.uuidString).")
 }
 
+// MARK: - clone_stamp_stroke
+
+func cloneStampStroke(_ p: Params, _ store: DocumentStore) async throws -> ToolResult {
+    let handle = try p.string("document")
+    let layer = try targetLayer(p)
+    let path = try strokePath(p, "path")
+    guard let source = p.object("source_point"),
+          let sx = (source["x"] as? NSNumber)?.doubleValue, let sy = (source["y"] as? NSNumber)?.doubleValue else {
+        throw RPCError.invalidParams("`source_point` must be {x, y}: where the clone copies from.")
+    }
+    try await withSession(handle, store) { session in
+        session.activeLayerID = layer
+        try brushSettings(p, into: session)
+        session.tool = .cloneStamp
+        session.setCloneSource(CGPoint(x: sx, y: sy))
+        runStroke(session, path)
+    }
+    return ToolResult("Cloned from \(sx.clean),\(sy.clean) along \(path.count) points on layer \(layer.uuidString).")
+}
+
+// MARK: - heal_stroke (spot healing)
+
+func healStroke(_ p: Params, _ store: DocumentStore) async throws -> ToolResult {
+    let handle = try p.string("document")
+    let layer = try targetLayer(p)
+    let path = try strokePath(p, "path")
+    let modeName = p.string("mode", default: SpotHealingMode.contentAware.rawValue)!
+    guard let mode = SpotHealingMode(rawValue: modeName) else {
+        throw RPCError.invalidParams("`mode` must be one of: "
+            + SpotHealingMode.allCases.map(\.rawValue).joined(separator: ", ") + ".")
+    }
+    try await withSession(handle, store) { session in
+        session.activeLayerID = layer
+        try brushSettings(p, into: session)
+        session.tool = .spotHealing
+        session.spotHealingMode = mode
+        runStroke(session, path)
+    }
+    return ToolResult("Healed \(path.count) points on layer \(layer.uuidString) (\(mode.rawValue)).")
+}
+
