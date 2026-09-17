@@ -156,3 +156,49 @@ func healStroke(_ p: Params, _ store: DocumentStore) async throws -> ToolResult 
     return ToolResult("Healed \(path.count) points on layer \(layer.uuidString) (\(mode.rawValue)).")
 }
 
+// MARK: - apply_selection
+
+func applySelection(_ p: Params, _ store: DocumentStore) async throws -> ToolResult {
+    let handle = try p.string("document")
+    let shape = p.string("shape", default: "rect")!
+    let modeName = p.string("mode", default: SelectionMode.replace.rawValue)!
+    // Compositor's SelectionMode is New/Add/Subtract; accept the lower-case aliases too.
+    let mode: SelectionMode
+    switch modeName.lowercased() {
+    case "replace", "new": mode = .replace
+    case "add":            mode = .add
+    case "subtract":       mode = .subtract
+    default: throw RPCError.invalidParams("`mode` must be replace, add or subtract (Compositor has no intersect).")
+    }
+    let path = CGMutablePath()
+    switch shape {
+    case "rect", "ellipse":
+        guard let x = p.double("x", default: nil), let y = p.double("y", default: nil),
+              let w = p.double("width", default: nil), let h = p.double("height", default: nil) else {
+            throw RPCError.invalidParams("A \(shape) needs `x`, `y`, `width` and `height`.")
+        }
+        let rect = CGRect(x: x, y: y, width: w, height: h)
+        if shape == "rect" { path.addRect(rect) } else { path.addEllipse(in: rect) }
+    case "lasso":
+        guard let points = p.raw["points"] as? [[String: Any]], points.count >= 3 else {
+            throw RPCError.invalidParams("A lasso needs `points`: at least 3 {x, y} vertices.")
+        }
+        let vertices = try points.map { entry -> CGPoint in
+            guard let x = (entry["x"] as? NSNumber)?.doubleValue, let y = (entry["y"] as? NSNumber)?.doubleValue else {
+                throw RPCError.invalidParams("Each lasso point needs numeric `x` and `y`.")
+            }
+            return CGPoint(x: x, y: y)
+        }
+        path.addLines(between: vertices)
+        path.closeSubpath()
+    default:
+        throw RPCError.invalidParams("`shape` must be rect, ellipse or lasso.")
+    }
+    try await withSession(handle, store) { session in
+        session.applySelection(path, mode: mode, name: "Select")
+    }
+    // `feather` is accepted for forward-compatibility but ignored: Compositor's selection
+    // stores no feather radius (edges are antialiased only). Noted in the README.
+    return ToolResult("Applied \(shape) selection (\(mode.rawValue)) to document \(handle).")
+}
+
