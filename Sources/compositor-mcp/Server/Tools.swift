@@ -186,7 +186,116 @@ let toolCatalogue: [[String: Any]] = [
           "format": choice("Output format. Defaults to the path's extension, else PNG.", ["png", "jpeg"]),
           "quality": num("JPEG quality, 0 to 1. Defaults to 0.9.")],
          required: ["document", "path"]),
-] + contentMaschineTools
+] + interactiveTools + contentMaschineTools
+
+// MARK: - Interactive tools
+//
+// These change real pixels. Points are in CANVAS pixels (0,0 at the top-left of the
+// document), the coordinate space every one of Compositor's stroke entry points takes.
+// A `path` point may carry `pressure` (0–1), but Compositor's brush has no pressure
+// input yet, so it is ignored. Brush settings mirror Compositor's `BrushSettings`.
+
+/// A stroke path: an array of {x, y, pressure?} points in canvas pixels.
+private let strokePath: [String: Any] = [
+    "type": "array",
+    "description": "Stroke path in canvas pixels, in order. Each point is {x, y, pressure?}; "
+        + "pressure (0–1) is accepted but not yet used by Compositor's brush.",
+    "items": ["type": "object",
+              "properties": ["x": num("Canvas x."), "y": num("Canvas y."),
+                             "pressure": num("0–1, optional and currently ignored.")],
+              "required": ["x", "y"]] as [String: Any],
+]
+private let brushTip: [String: Any] = [
+    "diameter": num("Brush diameter in pixels, 1–2000. Defaults to 40."),
+    "hardness": num("Edge hardness, 0 (soft) to 1 (hard). Defaults to 1."),
+    "opacity": num("Stroke opacity cap, 0.01–1. Defaults to 1."),
+    "red": num("Paint colour red, 0–1. Defaults to 0."),
+    "green": num("Paint colour green, 0–1. Defaults to 0."),
+    "blue": num("Paint colour blue, 0–1. Defaults to 0."),
+]
+
+let interactiveTools: [[String: Any]] = [
+    ["name": "paint_stroke",
+     "description": "Paints a stroke of real pixels on a layer. `tool` picks brush (paints the "
+        + "colour), eraser (clears pixels), smudge or liquify (push pixels around). Points are canvas "
+        + "pixels. Follow with render_preview to see it.",
+     "inputSchema": ["type": "object", "properties": ([
+        "document": doc, "layer": layer,
+        "tool": choice("Which tool. Defaults to brush.", ["brush", "eraser", "smudge", "liquify"]),
+        "path": strokePath,
+     ] as [String: Any]).merging(brushTip) { a, _ in a }, "required": ["document", "layer", "path"]] as [String: Any]],
+
+    ["name": "clone_stamp_stroke",
+     "description": "Clones pixels from `source_point` along a destination stroke, the Clone Stamp tool. "
+        + "The source keeps its offset from the stroke as it moves.",
+     "inputSchema": ["type": "object", "properties": ([
+        "document": doc, "layer": layer,
+        "source_point": ["type": "object", "description": "Where to copy from, in canvas pixels.",
+                         "properties": ["x": num("Canvas x."), "y": num("Canvas y.")],
+                         "required": ["x", "y"]] as [String: Any],
+        "path": strokePath,
+     ] as [String: Any]).merging(brushTip) { a, _ in a }, "required": ["document", "layer", "source_point", "path"]] as [String: Any]],
+
+    ["name": "heal_stroke",
+     "description": "Spot-heals along a stroke, rebuilding the painted area from nearby texture. Good "
+        + "for removing blemishes. Set brush diameter to cover the blemish.",
+     "inputSchema": ["type": "object", "properties": ([
+        "document": doc, "layer": layer, "path": strokePath,
+        "mode": choice("Healing mode. Defaults to Content-Aware.",
+                       ["Content-Aware", "Create Texture", "Proximity Match"]),
+     ] as [String: Any]).merging(brushTip) { a, _ in a }, "required": ["document", "layer", "path"]] as [String: Any]],
+
+    tool("apply_selection",
+         "Sets the document selection, which limits later painting and can drive crop_canvas. "
+         + "Coordinates are canvas pixels. Compositor supports replace/add/subtract (no intersect).",
+         ["document": doc,
+          "shape": choice("Selection shape. Defaults to rect.", ["rect", "ellipse", "lasso"]),
+          "mode": choice("How it combines with the current selection. Defaults to replace.",
+                         ["replace", "add", "subtract"]),
+          "x": num("Left edge, for rect/ellipse."),
+          "y": num("Top edge, for rect/ellipse."),
+          "width": num("Width, for rect/ellipse."),
+          "height": num("Height, for rect/ellipse."),
+          "points": ["type": "array", "description": "Lasso vertices in canvas pixels, {x, y}, at least 3.",
+                     "items": ["type": "object",
+                               "properties": ["x": num("Canvas x."), "y": num("Canvas y.")],
+                               "required": ["x", "y"]] as [String: Any]] as [String: Any],
+          "feather": num("Accepted but ignored: Compositor's selection has no feather radius.")],
+         required: ["document", "shape"]),
+
+    tool("crop_canvas",
+         "Crops the canvas to a rectangle, or to the current selection's bounds.",
+         ["document": doc,
+          "use_selection": flag("Crop to the current selection instead of a rect."),
+          "x": num("Left edge in canvas pixels."),
+          "y": num("Top edge in canvas pixels."),
+          "width": num("Crop width in pixels."),
+          "height": num("Crop height in pixels.")],
+         required: ["document"]),
+
+    tool("apply_filter",
+         "Applies a destructive filter to a layer's pixels, inside the selection if one is set.",
+         ["document": doc, "layer": layer,
+          "filter": choice("Which filter.", ["gaussian_blur", "motion_blur", "add_noise", "lens_correction"]),
+          "radius": num("Gaussian Blur radius (std dev) in pixels, 0.1–250."),
+          "angle": num("Motion Blur direction in degrees, −90–90."),
+          "distance": num("Motion Blur streak length in pixels, 1–2000."),
+          "amount": num("Add Noise strength as a percentage, 0.1–400."),
+          "gaussian": flag("Add Noise: Gaussian distribution instead of uniform."),
+          "monochromatic": flag("Add Noise: same amount on every channel."),
+          "distortion": num("Lens Correction remove-distortion, −100–100.")],
+         required: ["document", "layer", "filter"]),
+
+    tool("merge_layers",
+         "Merges the named layers into one pixel layer, blend modes, opacity and masks baked in.",
+         ["document": doc,
+          "layers": list("Layer ids to merge, at least two.", of: "string")],
+         required: ["document", "layers"]),
+
+    tool("flatten_document",
+         "Flattens every layer into a single pixel layer, as the canvas shows it.",
+         ["document": doc], required: ["document"]),
+]
 
 // MARK: - ContentMaschine
 //
