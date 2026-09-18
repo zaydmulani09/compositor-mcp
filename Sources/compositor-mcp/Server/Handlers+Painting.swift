@@ -202,3 +202,65 @@ func applySelection(_ p: Params, _ store: DocumentStore) async throws -> ToolRes
     return ToolResult("Applied \(shape) selection (\(mode.rawValue)) to document \(handle).")
 }
 
+// MARK: - crop_canvas
+
+func cropCanvas(_ p: Params, _ store: DocumentStore) async throws -> ToolResult {
+    let handle = try p.string("document")
+    try await withSession(handle, store) { session in
+        guard let document = session.document else { throw RPCError.invalidParams("No canvas to crop.") }
+        let rect: CGRect
+        if p.bool("use_selection", default: false)! {
+            guard let box = session.document?.selection?.path.boundingBoxOfPath, !box.isNull, !box.isEmpty else {
+                throw RPCError.invalidParams("No selection to crop to. Call apply_selection first or pass a rect.")
+            }
+            rect = box.integral
+        } else {
+            guard let x = p.double("x", default: nil), let y = p.double("y", default: nil),
+                  let w = p.double("width", default: nil), let h = p.double("height", default: nil) else {
+                throw RPCError.invalidParams("Pass a crop rect (`x`, `y`, `width`, `height`) or `use_selection`: true.")
+            }
+            rect = CGRect(x: x, y: y, width: w, height: h)
+        }
+        guard rect.intersection(CGRect(origin: .zero, size: document.size)).isEmpty == false else {
+            throw RPCError.invalidParams("The crop rect is outside the canvas.")
+        }
+        session.cropRect = rect
+        await session.commitCrop()
+    }
+    return ToolResult("Cropped document \(handle).")
+}
+
+// MARK: - apply_filter
+
+func applyFilter(_ p: Params, _ store: DocumentStore) async throws -> ToolResult {
+    let handle = try p.string("document")
+    let layer = try targetLayer(p)
+    let name = try p.string("filter")
+    // Map the request's snake_case names onto Compositor's FilterKind raw values.
+    let kinds: [String: FilterKind] = [
+        "gaussian_blur": .gaussianBlur, "motion_blur": .motionBlur,
+        "add_noise": .addNoise, "lens_correction": .lensCorrection,
+    ]
+    guard let kind = kinds[name] else {
+        throw RPCError.invalidParams("`filter` must be one of: \(kinds.keys.sorted().joined(separator: ", ")).")
+    }
+    try await withSession(handle, store) { session in
+        session.activeLayerID = layer
+        var settings = session.filterSettings
+        if let radius = p.double("radius", default: nil) { settings.radius = radius }
+        if let angle = p.double("angle", default: nil) { settings.angle = angle }
+        if let distance = p.double("distance", default: nil) { settings.distance = distance }
+        if let amount = p.double("amount", default: nil) { settings.amount = amount }
+        if let gaussian = p.bool("gaussian", default: nil) { settings.gaussian = gaussian }
+        if let mono = p.bool("monochromatic", default: nil) { settings.monochromatic = mono }
+        if let distortion = p.double("distortion", default: nil) { settings.distortion = distortion }
+        session.beginFilter(kind)
+        guard session.filterEdit != nil else {
+            throw RPCError.internalError("Compositor refused the filter: the layer may have no pixels.")
+        }
+        session.updateFilter(settings, preview: false)
+        await session.commitFilter()
+    }
+    return ToolResult("Applied \(name) to layer \(layer.uuidString).")
+}
+
