@@ -264,3 +264,33 @@ func applyFilter(_ p: Params, _ store: DocumentStore) async throws -> ToolResult
     return ToolResult("Applied \(name) to layer \(layer.uuidString).")
 }
 
+// MARK: - merge_layers / flatten_document
+
+func mergeLayers(_ p: Params, _ store: DocumentStore) async throws -> ToolResult {
+    let handle = try p.string("document")
+    let ids = try p.strings("layers")
+    let uuids = try ids.map { id -> UUID in
+        guard let uuid = UUID(uuidString: id) else { throw RPCError.invalidParams("`\(id)` is not a layer id.") }
+        return uuid
+    }
+    guard uuids.count >= 2 else { throw RPCError.invalidParams("`layers` must name at least two layers to merge.") }
+    try await withSession(handle, store) { session in
+        session.activeLayerID = uuids[0]           // didSet resets selectedLayerIDs, so set the set after.
+        session.selectedLayerIDs = Set(uuids)
+        session.mergeLayers()
+    }
+    return ToolResult("Merged \(uuids.count) layers in document \(handle).")
+}
+
+func flattenDocument(_ p: Params, _ store: DocumentStore) async throws -> ToolResult {
+    let handle = try p.string("document")
+    try await withSession(handle, store) { session in
+        guard let layers = session.document?.layers, layers.count >= 2 else {
+            throw RPCError.invalidParams("Nothing to flatten: the document has fewer than two layers.")
+        }
+        session.activeLayerID = layers[0].id
+        session.selectedLayerIDs = Set(layers.map(\.id))
+        session.mergeLayers()
+    }
+    return ToolResult("Flattened document \(handle) to a single layer.")
+}
