@@ -52,6 +52,10 @@ func makeSample(_ url: URL) {
     let space = CGColorSpace(name: CGColorSpace.sRGB)!
     let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
                         space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+    // Draw in top-left coordinates, the space the MCP canvas and the stroke paths use, so
+    // the blemish sits exactly where heal_stroke aims.
+    ctx.translateBy(x: 0, y: CGFloat(h))
+    ctx.scaleBy(x: 1, y: -1)
     let gradient = CGGradient(colorsSpace: space, colors: [
         CGColor(srgbRed: 0.20, green: 0.45, blue: 0.75, alpha: 1),
         CGColor(srgbRed: 0.85, green: 0.80, blue: 0.55, alpha: 1)] as CFArray, locations: [0, 1])!
