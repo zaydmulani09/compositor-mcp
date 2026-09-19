@@ -1,0 +1,29 @@
+name: CI
+
+on: [push]
+
+jobs:
+  build-and-test:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # vendor/Compositor is a submodule; setup.sh links its sources and
+          # patches it, so the real content has to be here.
+          submodules: recursive
+
+      - name: Select the newest installed Xcode
+        run: |
+          latest=$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -1)
+          if [ -n "$latest" ]; then sudo xcode-select -s "$latest"; fi
+          swift --version
+          xcodebuild -version
+
+      - name: Set up (link sources, patch submodule)
+        run: ./scripts/setup.sh
+
+      - name: Build
+        run: swift build
+
+      - name: Test
+        run: swift test
