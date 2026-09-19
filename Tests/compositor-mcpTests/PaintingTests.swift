@@ -74,11 +74,14 @@ final class PaintingTests: XCTestCase {
     func testEraserClearsPixels() async throws {
         let store = DocumentStore()
         let (doc, layer) = await makeDoc(store, fill: (0, 0, 255, 255)) // opaque blue
-        XCTAssertGreaterThan(try await pixel(store, doc, 50, 50).3, 0)
+        let filled = try await pixel(store, doc, 50, 50)
+        XCTAssertGreaterThan(filled.3, 0)
         _ = try await paintStroke(Params(["document": doc, "layer": layer, "tool": "eraser",
             "diameter": 12, "path": line(y: 50)]), store)
-        XCTAssertLessThan(try await pixel(store, doc, 50, 50).3, 128, "the eraser should have cut a hole")
-        XCTAssertEqual(try await pixel(store, doc, 5, 5).3, 255, "pixels away from the stroke stay opaque")
+        let hole = try await pixel(store, doc, 50, 50)
+        let intact = try await pixel(store, doc, 5, 5)
+        XCTAssertLessThan(hole.3, 128, "the eraser should have cut a hole")
+        XCTAssertEqual(intact.3, 255, "pixels away from the stroke stay opaque")
     }
 
     func testSmudgeChangesPixelsAlongTheStroke() async throws {
@@ -118,10 +121,12 @@ final class PaintingTests: XCTestCase {
         let manifest = ProjectManifest(documentID: UUID(), width: 100, height: 100, activeLayerID: id, layers: [record])
         let doc = await store.insert(ProjectSnapshot(manifest: manifest,
             images: [id: ImportedImage(image: img, thumbnail: img, name: "L")]), url: nil, name: "t")
-        XCTAssertEqual(try await pixel(store, doc, 75, 50).3, 0, "the right half starts empty")
+        let empty = try await pixel(store, doc, 75, 50)
+        XCTAssertEqual(empty.3, 0, "the right half starts empty")
         _ = try await cloneStampStroke(Params(["document": doc, "layer": id.uuidString, "diameter": 20,
             "source_point": ["x": 25, "y": 50], "path": [["x": 75, "y": 50], ["x": 76, "y": 50]]]), store)
-        XCTAssertGreaterThan(try await pixel(store, doc, 75, 50).3, 0, "clone should have stamped red into the right half")
+        let stamped = try await pixel(store, doc, 75, 50)
+        XCTAssertGreaterThan(stamped.3, 0, "clone should have stamped red into the right half")
     }
 
     func testHealStrokeChangesTheBlemish() async throws {
@@ -155,8 +160,10 @@ final class PaintingTests: XCTestCase {
             "x": 45, "y": 45, "width": 10, "height": 10]), store)
         _ = try await paintStroke(Params(["document": doc, "layer": layer, "tool": "brush",
             "diameter": 12, "red": 1.0, "path": line(y: 50)]), store)
-        XCTAssertGreaterThan(try await pixel(store, doc, 50, 50).3, 0, "inside the selection paints")
-        XCTAssertEqual(try await pixel(store, doc, 25, 50).3, 0, "outside the selection is masked out")
+        let inside = try await pixel(store, doc, 50, 50)
+        let outside = try await pixel(store, doc, 25, 50)
+        XCTAssertGreaterThan(inside.3, 0, "inside the selection paints")
+        XCTAssertEqual(outside.3, 0, "outside the selection is masked out")
     }
 
     func testCropCanvasShrinksTheDocument() async throws {
@@ -207,7 +214,8 @@ final class PaintingTests: XCTestCase {
         _ = try await mergeLayers(Params(["document": doc, "layers": [a.uuidString, b.uuidString]]), store)
         let snapshot = try await store.snapshot(doc)
         XCTAssertEqual(snapshot.manifest.layers.count, 1, "merge should collapse two layers into one")
-        XCTAssertGreaterThan(try await pixel(store, doc, 50, 50).3, 0, "the merged layer keeps its pixels")
+        let merged = try await pixel(store, doc, 50, 50)
+        XCTAssertGreaterThan(merged.3, 0, "the merged layer keeps its pixels")
     }
 
     func testFlattenDocumentCollapsesEverything() async throws {
@@ -223,6 +231,7 @@ final class PaintingTests: XCTestCase {
             images: [a: ImportedImage(image: red, thumbnail: red, name: "A"),
                      b: ImportedImage(image: green, thumbnail: green, name: "B")]), url: nil, name: "t")
         _ = try await flattenDocument(Params(["document": doc]), store)
-        XCTAssertEqual(try await store.snapshot(doc).manifest.layers.count, 1)
+        let flat = try await store.snapshot(doc)
+        XCTAssertEqual(flat.manifest.layers.count, 1)
     }
 }
