@@ -31,8 +31,9 @@ and can correct it before saving.
 
 ## Coverage
 
-It works on the document: structure, placement, non-destructive adjustments and
-output. It does not paint pixels.
+It works on the document — structure, placement, non-destructive adjustments and
+output — and now paints real pixels too: brush, eraser, clone stamp, spot healing,
+smudge, liquify, selections, crop, destructive filters, merge and flatten.
 
 **Covered**
 
@@ -42,10 +43,51 @@ output. It does not paint pixels.
 | Layers | `import_image`, `set_layer`, `delete_layer`, `duplicate_layer`, `reorder_layer`, `group_layers` |
 | Transform | `transform_layer` (move, scale, rotate, flip, sampling) |
 | Compositing | opacity and all 13 blend modes, folders, `set_clipping_mask` |
+| Painting | `paint_stroke` (brush, eraser, smudge, liquify), `clone_stamp_stroke`, `heal_stroke` |
+| Selection & crop | `apply_selection` (rect, ellipse, lasso; replace/add/subtract), `crop_canvas` |
+| Filters | `apply_filter` (Gaussian Blur, Motion Blur, Add Noise, Lens Correction) |
+| Combine | `merge_layers`, `flatten_document` |
 | Adjustments | `add_adjustment_layer`, `describe_adjustment` (Levels, Curves, Hue/Saturation, Exposure, Gradient Map, Grain) |
 | Canvas | `resize_canvas`, `resize_image` |
 | Output | `render_preview`, `export_image` |
 | Generation | `generate_layer`, `vary_layer`, `fuse_layers`, `restyle_composition`, `remove_layer_background`, `upscale_layer`, `list_generations`, `import_generation` |
+
+### Interactive tools (painting)
+
+Every interactive tool in Compositor reduces to the same shape: `begin(at:)` →
+`continue(at:)` × N → `finish()`, driven by AppKit mouse events in the app. These
+handlers drive the exact same `EditorSession` methods (`beginBrush`, `continueBrush`,
+`finishBrushImmediately`, `setCloneSource`, `applySelection`, `beginFilter`/`commitFilter`,
+`commitCrop`, `mergeLayers`) with a synthesised path of points instead of live NSEvents,
+then read the result back through `projectSnapshot()`. No new pixel engine — the app's
+own tile-based brush, `HealPixels.c`, `SmudgeLiquify`, `PixelFilter` and compositor do the
+work. Painting is committed to the same document draft the other tools edit and validated
+by the same store.
+
+```
+You:    paint a soft red brush stroke from (100,100) to (300,150) at 40% opacity
+        on layer 2, then spot-heal the blemish near (150,120)
+
+Claude: [paint_stroke  brush  path=[{100,100},…,{300,150}]  red=1 opacity=0.4 hardness=0.2]
+        [heal_stroke   path=[{150,120},{151,120}]  diameter=16]
+        [render_preview]
+```
+
+Three deliberate differences from a naive spec, each forced by Compositor's own source:
+
+- **Coordinates are canvas pixels, not layer-local.** `BrushStroke` maps a canvas point
+  onto the layer through the layer transform itself, so canvas coordinates are what every
+  entry point takes. Passing layer-local points would mean re-deriving that mapping and
+  getting it wrong.
+- **`pressure` is accepted but ignored.** Compositor's `BrushSettings` has diameter,
+  hardness, colour, opacity and erase/heal flags — no per-point pressure input. Rather than
+  fake dynamics by splitting a stroke into sub-strokes (which would break the one-stroke =
+  one-undo model), pressure is recorded and passed through untouched, ready for the day the
+  engine gains it.
+- **No `intersect` selection mode.** Compositor's `SelectionMode` is replace / add /
+  subtract only, and `apply_selection` exposes exactly those. `feather` is accepted but
+  ignored for the same honesty reason: the selection stores no feather radius (edges are
+  antialiased only).
 
 ### Image generation (optional)
 
@@ -85,15 +127,23 @@ CONTENTMASCHINE_BASE_URL=https://contentmaschine.ai/api/v1
 `CONTENTMASCHINE_API_KEY` and `CONTENTMASCHINE_BASE_URL` in the environment
 override the file. The key is never logged.
 
-**Not covered.** Compositor's interactive tools need a live editing session:
-brush, eraser, clone stamp, spot healing, smear and liquify, the gradient and
-shape tools, marquee, lasso and magic wand selections, crop, content-aware fill,
-painting layer masks, merging layers, and the destructive filters (Gaussian Blur,
-Motion Blur, Add Noise, Lens Correction, Remove Background).
+**Not covered yet.** The gradient and shape tools, magic-wand selection,
+content-aware fill, painting layer masks by hand, and Remove Background as a
+destructive filter (it exists as the ContentMaschine cutout instead). Text layers
+are absent because Compositor itself has no text. Per-point pressure/velocity
+dynamics are not wired, because the brush engine has no input for them.
 
-Those live on Compositor's `EditorSession`, which is bound to UI state. Their pixel
-engines are UI-free C, so a headless driver is possible. See
+Those remaining tools live on the same `EditorSession`; the ones shipped here prove
+the headless-driver approach, and the rest follow the same pattern. See
 [ROADMAP](#roadmap).
+
+> **Build status.** The interactive tools were written against Compositor's source
+> read from the vendored submodule; they have not been compiled or run, because that
+> needs macOS 26 + Swift 6.2 (this work was done on Windows). Build with
+> `scripts/setup.sh` and run `swift test` on a Mac to exercise the pixel tests in
+> `Tests/`. Runtime points to verify there: `EditorSession` is `@Observable` and
+> default-constructible, but its brush path touches `MetalBrushCoverage.shared`
+> (Metal) and its filter/crop commits are `async` — confirm they behave headless.
 
 ## Requirements
 
@@ -173,9 +223,15 @@ git -C vendor/Compositor fetch origin && git -C vendor/Compositor checkout <comm
 
 ## Roadmap
 
-- Destructive filters (blur, noise, lens correction) over the existing C engines
-- Painting and importing layer masks
-- Merge and flatten
+Done in this release: painting (brush, eraser, smudge, liquify), clone stamp, spot
+healing, selections, crop, destructive filters (Gaussian/Motion Blur, Add Noise, Lens
+Correction), merge and flatten.
+
+Still open:
+
+- Painting and importing layer masks (paint on the mask channel, not just pixels)
+- Gradient and shape tools, magic-wand selection, content-aware fill
+- Per-point pressure/velocity, once Compositor's brush engine accepts it
 - Text layers, which Compositor does not have yet
 
 ## License
