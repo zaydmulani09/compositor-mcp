@@ -28,7 +28,7 @@ jobs:
       - name: Test
         run: swift test
 
-      - name: Demo (remove power lines over JSON-RPC, export each step)
+      - name: Demo (erase a plane from the sky over JSON-RPC)
         run: swift demo/demo.swift .build/debug/compositor-mcp demo-output
 
       - name: Upload the step frames and the JSON-RPC calls
