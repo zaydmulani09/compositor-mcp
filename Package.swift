@@ -33,5 +33,13 @@ let package = Package(
                 ]),
             ]
         ),
+
+        // Pixel-level tests for the interactive tools: paint, then render, then assert
+        // the exported pixels changed where the stroke ran and nowhere else.
+        .testTarget(
+            name: "compositor-mcpTests",
+            dependencies: ["compositor-mcp"],
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
     ]
 )
