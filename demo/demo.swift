@@ -57,37 +57,57 @@ func medianLuma(_ img: (data: [UInt8], w: Int, h: Int)) -> Int {
     return 128
 }
 
-/// Pixels this much darker than the sky are "object". The plane is near-black on a bright
-/// sky, so a wide gap catches it while leaving lens vignetting (a mild darkening) alone.
-let darkGap = 70
+/// Pixels this much darker than the sky are "object". Lens vignetting also darkens the
+/// frame, but only near the edges, so darkness alone isn't enough — see the border rule below.
+let darkGap = 50
 
 // MARK: - Find the plane
+//
+// The plane is one compact dark blob floating in the interior; the vignette is a darkening
+// that touches the frame's edges. So: take the largest connected clump of dark pixels that
+// does NOT reach any border. That throws the vignette away and keeps the plane, wherever it
+// sits. Detection runs on a 1/4 grid — plenty for the box, far cheaper than the full 18 MP.
 
 let source = loadRGBA(sourceImage)
 let (w, h) = (source.w, source.h)
 let skyLuma = medianLuma(source)
 let threshold = skyLuma - darkGap
 
-var xs: [Int] = [], ys: [Int] = []
-for y in 0..<h {
-    let row = y * w * 4
-    for x in 0..<w where luma(source.data, row + x * 4) < threshold {
-        xs.append(x); ys.append(y)
-    }
+let step = 4
+let gw = w / step, gh = h / step
+var mask = [Bool](repeating: false, count: gw * gh)
+for gy in 0..<gh {
+    let row = gy * step * w * 4
+    for gx in 0..<gw where luma(source.data, row + gx * step * 4) < threshold { mask[gy * gw + gx] = true }
 }
-guard xs.count >= 50 else { fail("found no dark object against the sky (skyLuma \(skyLuma)) — wrong image?") }
-guard xs.count < w * h / 20 else { fail("dark pixels cover >5% of the frame — not one isolated object") }
 
-// Trim the outer 0.5% on each axis so a few stray dark specks can't inflate the box.
-xs.sort(); ys.sort()
-func trimmed(_ v: [Int]) -> (lo: Int, hi: Int) {
-    let cut = max(1, v.count / 200)
-    return (v[cut], v[v.count - 1 - cut])
+var visited = [Bool](repeating: false, count: gw * gh)
+var stack: [Int] = []
+var best: (count: Int, x0: Int, y0: Int, x1: Int, y1: Int)?
+for seed in 0..<(gw * gh) where mask[seed] && !visited[seed] {
+    stack.removeAll(keepingCapacity: true)
+    stack.append(seed); visited[seed] = true
+    var count = 0, x0 = gw, y0 = gh, x1 = 0, y1 = 0, touchesBorder = false
+    while let p = stack.popLast() {
+        let gx = p % gw, gy = p / gw
+        count += 1
+        x0 = min(x0, gx); x1 = max(x1, gx); y0 = min(y0, gy); y1 = max(y1, gy)
+        if gx == 0 || gy == 0 || gx == gw - 1 || gy == gh - 1 { touchesBorder = true }
+        if gx > 0, mask[p - 1], !visited[p - 1] { visited[p - 1] = true; stack.append(p - 1) }
+        if gx < gw - 1, mask[p + 1], !visited[p + 1] { visited[p + 1] = true; stack.append(p + 1) }
+        if gy > 0, mask[p - gw], !visited[p - gw] { visited[p - gw] = true; stack.append(p - gw) }
+        if gy < gh - 1, mask[p + gw], !visited[p + gw] { visited[p + gw] = true; stack.append(p + gw) }
+    }
+    if touchesBorder { continue }              // vignette / edge darkening, not the plane
+    if best == nil || count > best!.count { best = (count, x0, y0, x1, y1) }
 }
-let (x0, x1) = trimmed(xs), (y0, y1) = trimmed(ys)
-let (bx, by, bw, bh) = (x0, y0, x1 - x0 + 1, y1 - y0 + 1)
+guard let plane = best, plane.count >= 20 else {
+    fail("no compact dark object away from the edges (sky luma \(skyLuma)) — wrong image?")
+}
+let (bx, by) = (plane.x0 * step, plane.y0 * step)
+let (bw, bh) = ((plane.x1 - plane.x0 + 1) * step, (plane.y1 - plane.y0 + 1) * step)
 let cx = bx + bw / 2, cy = by + bh / 2
-print("sky luma \(skyLuma), object pixels \(xs.count), plane bbox \(bx),\(by) \(bw)x\(bh)")
+print("sky luma \(skyLuma), plane cells \(plane.count), plane bbox \(bx),\(by) \(bw)x\(bh)")
 
 // A brush wide enough to swallow the whole plane, stroked across its long axis.
 let diameter = min(2000, max(bw, bh) + 120)
