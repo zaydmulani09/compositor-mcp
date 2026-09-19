@@ -1,12 +1,14 @@
-// Headless end-to-end demo: drives the built compositor-mcp binary over real
-// JSON-RPC (the same protocol an agent speaks), on a sample image with an obvious
-// blemish. It exports before.png (right after import) and after.png (after a brush
-// stroke and a spot heal), records every JSON-RPC call it sent, and fails unless the
-// two PNGs actually differ — so a green run proves pixels changed, not just "no crash".
+// Headless end-to-end demo on a real photo: drives the built compositor-mcp binary
+// over real JSON-RPC (the protocol an agent speaks) to remove power lines from the sky.
+// It imports the photo, then runs a two-tool edit — heal_stroke to erase a bold cable
+// out of the clear sky, then clone_stamp_stroke to patch a second one with nearby sky —
+// exporting a frame after import, after the heal, and after the clone. It records every
+// JSON-RPC call and fails unless the frames actually differ, so a green run proves pixels
+// changed at each step, not just "no crash".
 //
-//   swift demo/demo.swift [path-to-binary] [output-dir]
+//   swift demo/demo.swift [path-to-binary] [output-dir] [source-image]
 //
-// Defaults: .build/debug/compositor-mcp, ./demo-output
+// Defaults: .build/debug/compositor-mcp, ./demo-output, demo/source.webp
 
 import Foundation
 import CoreGraphics
@@ -16,6 +18,7 @@ import UniformTypeIdentifiers
 let args = CommandLine.arguments
 let binary = args.count > 1 ? args[1] : ".build/debug/compositor-mcp"
 let outDir = URL(fileURLWithPath: args.count > 2 ? args[2] : "demo-output")
+let sourceImage = URL(fileURLWithPath: args.count > 3 ? args[3] : "demo/source.webp")
 try? FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
 
 func fail(_ message: String) -> Never {
@@ -23,7 +26,13 @@ func fail(_ message: String) -> Never {
     exit(1)
 }
 
-// MARK: - PNG helpers
+// MARK: - Image helpers
+
+func loadCGImage(_ url: URL) -> CGImage {
+    guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
+          let image = CGImageSourceCreateImageAtIndex(src, 0, nil) else { fail("could not read \(url.path)") }
+    return image
+}
 
 func writePNG(_ image: CGImage, to url: URL) {
     guard let dest = CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil)
@@ -33,8 +42,7 @@ func writePNG(_ image: CGImage, to url: URL) {
 }
 
 func loadRGBA(_ url: URL) -> (data: [UInt8], w: Int, h: Int) {
-    guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
-          let image = CGImageSourceCreateImageAtIndex(src, 0, nil) else { fail("could not read \(url.path)") }
+    let image = loadCGImage(url)
     let w = image.width, h = image.height
     var buffer = [UInt8](repeating: 0, count: w * h * 4)
     let space = CGColorSpace(name: CGColorSpace.sRGB)!
@@ -46,27 +54,18 @@ func loadRGBA(_ url: URL) -> (data: [UInt8], w: Int, h: Int) {
     return (buffer, w, h)
 }
 
-// A photo-ish gradient with a few shapes and one obvious dark blemish at (300, 300).
-func makeSample(_ url: URL) {
-    let w = 1024, h = 768
-    let space = CGColorSpace(name: CGColorSpace.sRGB)!
-    let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
-                        space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
-    // Draw in top-left coordinates, the space the MCP canvas and the stroke paths use, so
-    // the blemish sits exactly where heal_stroke aims.
-    ctx.translateBy(x: 0, y: CGFloat(h))
-    ctx.scaleBy(x: 1, y: -1)
-    let gradient = CGGradient(colorsSpace: space, colors: [
-        CGColor(srgbRed: 0.20, green: 0.45, blue: 0.75, alpha: 1),
-        CGColor(srgbRed: 0.85, green: 0.80, blue: 0.55, alpha: 1)] as CFArray, locations: [0, 1])!
-    ctx.drawLinearGradient(gradient, start: .zero, end: CGPoint(x: w, y: h), options: [])
-    ctx.setFillColor(CGColor(srgbRed: 0.95, green: 0.5, blue: 0.3, alpha: 0.9))
-    ctx.fillEllipse(in: CGRect(x: 620, y: 200, width: 260, height: 260))
-    // The blemish: a small near-black blob to heal away.
-    ctx.setFillColor(CGColor(srgbRed: 0.05, green: 0.04, blue: 0.06, alpha: 1))
-    ctx.fillEllipse(in: CGRect(x: 272, y: 272, width: 56, height: 56))
-    guard let image = ctx.makeImage() else { fail("could not render the sample") }
-    writePNG(image, to: url)
+/// Pixels differing by more than 16 on any channel, over the whole frame.
+func changedPixels(_ a: URL, _ b: URL) -> (changed: Int, total: Int) {
+    let x = loadRGBA(a), y = loadRGBA(b)
+    guard x.w == y.w, x.h == y.h else { fail("frame sizes differ") }
+    var changed = 0
+    for i in stride(from: 0, to: x.data.count, by: 4) {
+        let dr = abs(Int(x.data[i]) - Int(y.data[i]))
+        let dg = abs(Int(x.data[i + 1]) - Int(y.data[i + 1]))
+        let db = abs(Int(x.data[i + 2]) - Int(y.data[i + 2]))
+        if max(dr, dg, db) > 16 { changed += 1 }
+    }
+    return (changed, x.w * x.h)
 }
 
 // MARK: - JSON-RPC client over the binary's stdio
@@ -76,8 +75,8 @@ final class Server {
     private let inPipe = Pipe(), outPipe = Pipe()
     private var buffer = Data()
     private var nextID = 0
-    var calls: [String] = []       // every request line sent
-    var responses: [String] = []   // every response line received
+    var calls: [String] = []
+    var responses: [String] = []
 
     init(_ path: String) {
         proc.executableURL = URL(fileURLWithPath: path)
@@ -111,7 +110,6 @@ final class Server {
         return readLine()
     }
 
-    /// A tools/call, returning the tool's text output (and failing on a tool error).
     func tool(_ name: String, _ arguments: [String: Any]) -> String {
         let response = send("tools/call", ["name": name, "arguments": arguments])
         let result = response["result"] as? [String: Any]
@@ -121,71 +119,71 @@ final class Server {
         return text
     }
 
-    func finish() {
-        inPipe.fileHandleForWriting.closeFile()
-        proc.waitUntilExit()
-    }
+    func finish() { inPipe.fileHandleForWriting.closeFile(); proc.waitUntilExit() }
 }
 
-// The token right after a marker like "Document handle: " or "Layer id: ".
 func token(after marker: String, in text: String) -> String {
     guard let range = text.range(of: marker) else { fail("expected '\(marker)' in:\n\(text)") }
-    let rest = text[range.upperBound...]
-    return String(rest.prefix { !$0.isWhitespace })
+    return String(text[range.upperBound...].prefix { !$0.isWhitespace })
 }
 
-// MARK: - Run the sequence
+// MARK: - Prepare the photo (webp -> png at full resolution)
 
-let sampleURL = outDir.appendingPathComponent("sample.png")
-let beforeURL = outDir.appendingPathComponent("before.png")
-let afterURL = outDir.appendingPathComponent("after.png")
-makeSample(sampleURL)
+let base = loadCGImage(sourceImage)
+let (w, h) = (base.width, base.height)
+let inputURL = outDir.appendingPathComponent("input.png")
+writePNG(base, to: inputURL)
+
+let step0 = outDir.appendingPathComponent("step0_imported.png")
+let step1 = outDir.appendingPathComponent("step1_healed.png")
+let step2 = outDir.appendingPathComponent("step2_cloned.png")
+
+// MARK: - The edit, over JSON-RPC
+//
+// Coordinates are canvas (top-left) pixels in the photo's own 1920x1280 space. The two
+// targets are bold cables in the clear upper sky. Tweak and re-run if a stroke misses.
+
+let healLine: [[String: Int]] = [["x": 280, "y": 300], ["x": 480, "y": 245], ["x": 700, "y": 190],
+                                 ["x": 920, "y": 135], ["x": 1120, "y": 85]]
+let cloneLine: [[String: Int]] = [["x": 1300, "y": 150], ["x": 1500, "y": 110], ["x": 1700, "y": 80]]
+let cloneSource: [String: Int] = ["x": 1300, "y": 270]  // clean blue sky below the cable
 
 let server = Server(binary)
 server.send("initialize", ["protocolVersion": "2025-06-18"])
 
-let created = server.tool("create_document", ["width": 1024, "height": 768, "name": "demo"])
+let created = server.tool("create_document", ["width": w, "height": h, "name": "powerlines"])
 let doc = token(after: "Document handle: ", in: created)
-
-let imported = server.tool("import_image", ["document": doc, "path": sampleURL.path, "fit": true])
+let imported = server.tool("import_image", ["document": doc, "path": inputURL.path])
 let layer = token(after: "Layer id: ", in: imported)
 
-// before.png: exactly what was imported, no edits yet.
-server.tool("export_image", ["document": doc, "path": beforeURL.path])
+server.tool("export_image", ["document": doc, "path": step0.path])
 
-// A bright brush stroke across the frame, then heal the blemish at (300, 300).
-server.tool("paint_stroke", [
-    "document": doc, "layer": layer, "tool": "brush",
-    "diameter": 26, "hardness": 0.4, "opacity": 0.9, "red": 0.95, "green": 0.1, "blue": 0.1,
-    "path": [["x": 150, "y": 150], ["x": 400, "y": 300], ["x": 650, "y": 430], ["x": 874, "y": 618]],
-])
-server.tool("heal_stroke", [
-    "document": doc, "layer": layer, "diameter": 64,
-    "path": [["x": 300, "y": 300], ["x": 302, "y": 300]],
-])
+server.tool("heal_stroke", ["document": doc, "layer": layer, "diameter": 34, "path": healLine])
+server.tool("export_image", ["document": doc, "path": step1.path])
 
-server.tool("export_image", ["document": doc, "path": afterURL.path])
+server.tool("clone_stamp_stroke", ["document": doc, "layer": layer, "diameter": 34,
+                                    "source_point": cloneSource, "path": cloneLine])
+server.tool("export_image", ["document": doc, "path": step2.path])
+
 server.finish()
 
-// Record the literal JSON-RPC sequence — this is what proves an agent drove the edit.
 try server.calls.joined(separator: "\n").write(to: outDir.appendingPathComponent("calls.jsonl"),
                                                 atomically: true, encoding: .utf8)
 try server.responses.joined(separator: "\n").write(to: outDir.appendingPathComponent("responses.jsonl"),
                                                     atomically: true, encoding: .utf8)
 
-// MARK: - Prove the pixels actually changed
+// MARK: - Prove each step changed pixels
 
-let before = loadRGBA(beforeURL), after = loadRGBA(afterURL)
-guard before.w == after.w, before.h == after.h else { fail("before/after sizes differ") }
-var changed = 0
-for i in stride(from: 0, to: before.data.count, by: 4) {
-    let dr = abs(Int(before.data[i]) - Int(after.data[i]))
-    let dg = abs(Int(before.data[i + 1]) - Int(after.data[i + 1]))
-    let db = abs(Int(before.data[i + 2]) - Int(after.data[i + 2]))
-    if max(dr, dg, db) > 16 { changed += 1 }
-}
-let total = before.w * before.h
-print("changed pixels: \(changed) of \(total) (\(String(format: "%.2f", Double(changed) / Double(total) * 100))%)")
-// The brush stroke alone covers well over a thousand pixels; require a real, visible delta.
-if changed < 1000 { fail("before.png and after.png are effectively identical — no visible edit") }
-print("demo OK — before.png and after.png differ visibly; JSON-RPC calls in calls.jsonl")
+let healDelta = changedPixels(step0, step1)
+let cloneDelta = changedPixels(step1, step2)
+let overall = changedPixels(step0, step2)
+func pct(_ d: (changed: Int, total: Int)) -> String { String(format: "%.3f%%", Double(d.changed) / Double(d.total) * 100) }
+print("photo: \(w)x\(h)")
+print("heal changed:  \(healDelta.changed) px (\(pct(healDelta)))")
+print("clone changed: \(cloneDelta.changed) px (\(pct(cloneDelta)))")
+print("overall:       \(overall.changed) px (\(pct(overall)))")
+
+// Each tool should visibly touch the frame; a stroke that missed its cable shows up here as ~0.
+if healDelta.changed < 200 { fail("heal_stroke barely changed anything — it likely missed the cable") }
+if cloneDelta.changed < 200 { fail("clone_stamp_stroke barely changed anything — it likely missed the cable") }
+print("demo OK — three frames exported, each tool visibly changed the photo; calls in calls.jsonl")

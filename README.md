@@ -145,8 +145,9 @@ the headless-driver approach, and the rest follow the same pattern. See
 > render through Compositor's own exporter and assert the raster actually changed
 > where each tool ran — the brush test drives `MetalBrushCoverage` headlessly and
 > the filter/crop tests exercise the `async` commits, so those paths are confirmed
-> to work without a UI. The `demo` job also runs a full paint-and-heal sequence over
-> the MCP protocol and uploads before/after PNGs plus the JSON-RPC calls as artifacts.
+> to work without a UI. The `demo` step also runs a real two-tool edit over the MCP
+> protocol on a photo — heal a power line out of the sky, then clone-stamp a second one
+> clean — and uploads a frame after each step plus the JSON-RPC calls as artifacts.
 
 ## Requirements
 

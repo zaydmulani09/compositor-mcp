@@ -28,12 +28,12 @@ jobs:
       - name: Test
         run: swift test
 
-      - name: Demo (paint + heal over JSON-RPC, export before/after)
+      - name: Demo (remove power lines over JSON-RPC, export each step)
         run: swift demo/demo.swift .build/debug/compositor-mcp demo-output
 
-      - name: Upload before/after and the JSON-RPC calls
+      - name: Upload the step frames and the JSON-RPC calls
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: demo-before-after
+          name: demo-frames
           path: demo-output/
