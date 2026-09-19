@@ -1,5 +1,7 @@
 # compositor-mcp
 
+[![CI](https://github.com/zaydmulani09/compositor-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/zaydmulani09/compositor-mcp/actions/workflows/ci.yml)
+
 An [MCP](https://modelcontextprotocol.io) server that lets an agent build and edit
 [Compositor](https://github.com/robbietilton/Compositor) image projects.
 
@@ -137,13 +139,14 @@ Those remaining tools live on the same `EditorSession`; the ones shipped here pr
 the headless-driver approach, and the rest follow the same pattern. See
 [ROADMAP](#roadmap).
 
-> **Build status.** The interactive tools were written against Compositor's source
-> read from the vendored submodule; they have not been compiled or run, because that
-> needs macOS 26 + Swift 6.2 (this work was done on Windows). Build with
-> `scripts/setup.sh` and run `swift test` on a Mac to exercise the pixel tests in
-> `Tests/`. Runtime points to verify there: `EditorSession` is `@Observable` and
-> default-constructible, but its brush path touches `MetalBrushCoverage.shared`
-> (Metal) and its filter/crop commits are `async` — confirm they behave headless.
+> **Build status.** Built and tested on macOS in
+> [CI](https://github.com/zaydmulani09/compositor-mcp/actions/workflows/ci.yml) on
+> every push: `scripts/setup.sh`, `swift build`, `swift test`. The 10 pixel tests
+> render through Compositor's own exporter and assert the raster actually changed
+> where each tool ran — the brush test drives `MetalBrushCoverage` headlessly and
+> the filter/crop tests exercise the `async` commits, so those paths are confirmed
+> to work without a UI. The `demo` job also runs a full paint-and-heal sequence over
+> the MCP protocol and uploads before/after PNGs plus the JSON-RPC calls as artifacts.
 
 ## Requirements
 
